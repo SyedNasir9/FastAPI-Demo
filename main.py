@@ -30,4 +30,22 @@ def get_product_by_id(id: int):
 @app.post("/product")
 def add_product(product: Product):
     products.append(product.dict())
-    return {"message": product.name + " added successfully"}
+    return {"message": product.name + " added successfully"} 
+
+@app.put("/product")
+def update_product(id: int, product: Product):
+      for i in range(len(products)):
+          if products[i]["id"] == id:
+             products[i] = product
+             return {"message": "Product updated successfully"}
+          
+      return {"message": "PRODUCT NOT FOUND"}    
+
+@app.delete("/product")
+def delete_product(id: int):
+    for i in range(len(products)):
+        if products[i]["id"] == id:
+            del products[i]
+            return {"message": "Product deleted successfully"}
+        
+    return {"message": "PRODUCT NOT FOUND"}        

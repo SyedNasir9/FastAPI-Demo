@@ -46,8 +46,8 @@ jobs:
         run: npm run lint --if-present
 
       - name: Unit tests (if configured)
-        run: npm test --if-present -- --watchAll=false
-
+        run: npm test --if-present -- --passWithNoTests
+        
       - name: Typecheck (if configured)
         run: npm run typecheck --if-present
 

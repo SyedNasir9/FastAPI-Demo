@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from models import Product
 from database import session, engine
 import database_models
+from sqlalchemy.orm import Session
 
 app = FastAPI()
 database_models.Base.metadata.create_all(bind=engine)
@@ -18,18 +19,33 @@ products = [
     {"id": 4, "name": "Monitor", "description": "4K UHD Monitor", "price": 399.99, "quantity": 8    },
 ]
 
-@app.get("/products")
-def get_all_products():
+def get_db():
     db = session()
-    db.query()
-    return products
+    try:
+        yield db
+    finally:    
+        db.close()
+
+
+def init_db():
+    db = session()
+    count = db.query(database_models.Product).count()
+    if count == 0:
+        for product in products:
+            db.add(database_models.Product(**product))
+        db.commit()
+init_db()
+
+@app.get("/products")
+def get_all_products(db: Session = Depends(get_db)):
+    db_products = db.query(database_models.Product).all()
+    return db_products
 
 @app.get("/product/{id}")
-def get_product_by_id(id: int):
-    for product in products:
-        if product["id"] == id:
-            return product
-
+def get_product_by_id(id: int, db: Session = Depends(get_db)):
+    db_product = db.query(database_models.Product).filter(database_models.Product.id == id).first()
+    if db_product:
+         return db_product
     return {"message": "PRODUCT NOT FOUND"}
 
 @app.post("/product")

@@ -1,3 +1,5 @@
+from itertools import product
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from models import Product
@@ -6,6 +8,11 @@ import database_models
 from sqlalchemy.orm import Session
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+)
 database_models.Base.metadata.create_all(bind=engine)
 
 @app.get("/")
@@ -41,32 +48,38 @@ def get_all_products(db: Session = Depends(get_db)):
     db_products = db.query(database_models.Product).all()
     return db_products
 
-@app.get("/product/{id}")
+@app.get("/products/{id}")
 def get_product_by_id(id: int, db: Session = Depends(get_db)):
     db_product = db.query(database_models.Product).filter(database_models.Product.id == id).first()
     if db_product:
          return db_product
     return {"message": "PRODUCT NOT FOUND"}
 
-@app.post("/product")
-def add_product(product: Product):
-    products.append(product.dict())
-    return {"message": product.name + " added successfully"} 
+@app.post("/products")
+def add_product(product: Product, db: Session = Depends(get_db)):
+     db.add(database_models.Product(**product.model_dump()))
+     db.commit()
+       
 
-@app.put("/product")
-def update_product(id: int, product: Product):
-      for i in range(len(products)):
-          if products[i]["id"] == id:
-             products[i] = product
-             return {"message": "Product updated successfully"}
-          
-      return {"message": "PRODUCT NOT FOUND"}    
+@app.put("/products/{id}")
+def update_product(id: int, product: Product, db: Session = Depends(get_db)):
+       db_product = db.query(database_models.Product).filter(database_models.Product.id == id).first()
+       if db_product:
+            db_product.name = product.name
+            db_product.description = product.description
+            db_product.price = product.price
+            db_product.quantity = product.quantity
+            db.commit()
+            return {"message": "Product updated successfully"}
+       else: 
+        return {"message": "PRODUCT NOT FOUND"}    
 
-@app.delete("/product")
-def delete_product(id: int):
-    for i in range(len(products)):
-        if products[i]["id"] == id:
-            del products[i]
+@app.delete("/products/{id}")
+def delete_product(id: int,  db: Session = Depends(get_db)):
+     db_product = db.query(database_models.Product).filter(database_models.Product.id == id).first()
+     if db_product:
+            db.delete(db_product)
+            db.commit()
             return {"message": "Product deleted successfully"}
-        
-    return {"message": "PRODUCT NOT FOUND"}        
+     else:
+          return {"message": "PRODUCT NOT FOUND"}        

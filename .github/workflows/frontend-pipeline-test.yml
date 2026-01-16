@@ -103,11 +103,11 @@ jobs:
           echo "Created manifest.json:"
           cat ../build-meta/manifest.json
 
-      - name: Upload dist artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dev-dist-${{ github.sha }}
-          path: frontend/dist
+          name: dev-build-${{ github.sha }}
+          path: frontend/build
           if-no-files-found: error
           retention-days: 7
 

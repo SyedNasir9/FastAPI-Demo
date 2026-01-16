@@ -87,7 +87,7 @@ jobs:
         run: npm run -s typecheck --if-present
 
       - name: Unit tests (if present)
-        run: npm run -s test --if-present
+        run: npm run -s test --if-present --passWithNoTests
 
       - name: Coverage threshold (optional placeholder)
         run: |

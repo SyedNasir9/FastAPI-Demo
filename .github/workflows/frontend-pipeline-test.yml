@@ -2,7 +2,7 @@ name: Dev CI + Build (no deploy)
 
 on:
   push:
-    branches: [dev]
+    branches: [main]
     # Path filter: run only when frontend changes
     paths:
       - "frontend/**"

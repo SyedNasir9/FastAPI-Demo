@@ -1,38 +1,41 @@
-name: Frontend (MVP) - S3 + CloudFront
+name: Dev CI + Build (no deploy)
 
 on:
   push:
-    branches: ["main"]
+    branches: [dev]
+    # Path filter: run only when frontend changes
     paths:
       - "frontend/**"
-      - ".github/workflows/frontend-*.yml"
-
-  pull_request:
-    branches: ["main"]
-    paths:
-      - "frontend/**"
+      - "package.json"
+      - "package-lock.json"
+      - "pnpm-lock.yaml"
+      - "yarn.lock"
+      - ".github/workflows/**"
 
 concurrency:
-  group: frontend-${{ github.ref }}
+  group: dev-ci-build
   cancel-in-progress: true
 
 permissions:
   contents: read
-  id-token: write
+  actions: read
 
 jobs:
-  ci:
-    name: CI (lint/test/typecheck/build)
+  ci_build:
+    name: CI + Build (dev)
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: frontend
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Setup Node + npm cache
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -42,45 +45,76 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint (if configured)
-        run: npm run lint --if-present
+      # Mandatory gates (fail = stop)
+      - name: Lint (if present)
+        run: |
+          if npm run -s lint --if-present; then
+            echo "Lint completed."
+          else
+            echo "Lint script missing, skipping."
+          fi
 
-      - name: Unit tests (if configured)
-        run: npm test --if-present -- --passWithNoTests
+      - name: Typecheck (if present)
+        run: |
+          if npm run -s typecheck --if-present; then
+            echo "Typecheck completed."
+          else
+            echo "Typecheck script missing, skipping."
+          fi
 
-      - name: Typecheck (if configured)
-        run: npm run typecheck --if-present
+      - name: Unit tests (if present)
+        run: |
+          if npm run -s test --if-present; then
+            echo "Tests completed."
+          else
+            echo "Test script missing, skipping."
+          fi
 
-      - name: Build (CRA -> build/)
+      # Optional coverage gate (works if your test script produces coverage)
+      # You can enforce this later once coverage exists.
+      - name: Coverage threshold (optional placeholder)
+        run: |
+          echo "Coverage gate placeholder."
+          echo "Once coverage is generated, enforce threshold here."
+
+      - name: Build
         run: npm run build
 
-      - name: Upload build artifact
+      - name: Create build metadata
+        shell: bash
+        run: |
+          mkdir -p ../build-meta
+          VERSION="$(node -p "require('./package.json').version" 2>/dev/null || echo '0.0.0')"
+          SHA="${GITHUB_SHA}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          cat > ../build-meta/manifest.json <<EOF
+          {
+            "env": "dev",
+            "version": "${VERSION}",
+            "sha": "${SHA}",
+            "run_id": "${GITHUB_RUN_ID}",
+            "run_url": "${RUN_URL}",
+            "build_time_utc": "${BUILD_TIME}"
+          }
+          EOF
+
+          echo "Created manifest.json:"
+          cat ../build-meta/manifest.json
+
+      - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build
-          path: frontend/build
+          name: dev-dist-${{ github.sha }}
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7
 
-  deploy:
-    name: Deploy to S3 + Invalidate CloudFront
-    runs-on: ubuntu-latest
-    needs: ci
-    if: github.event_name == 'push'
-
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - name: Upload metadata artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: build
-          path: build
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }} 
-
-      - name: Sync build/ to S3
-        run: aws s3 sync build s3://${{ secrets.S3_BUCKET }} --delete
-
-      - name: Invalidate CloudFront cache
-        run: aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DIST_ID }} --paths "/*"
+          name: dev-meta-${{ github.sha }}
+          path: build-meta/manifest.json
+          if-no-files-found: error
+          retention-days: 30

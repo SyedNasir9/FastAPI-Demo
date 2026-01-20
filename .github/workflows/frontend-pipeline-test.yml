@@ -108,18 +108,19 @@ jobs:
           EOF
           cat ../build-meta/manifest.json
 
-      - name: Package dist as zip
-        shell: bash
+      - name: Package build as zip
+        working-directory: frontend
         run: |
-          rm -f ../frontend-dist.zip
-          (cd dist && zip -r ../frontend-dist.zip .)
+          rm -f frontend-build.zip
+          cd build
+          zip -r ../frontend-build.zip .  
 
       - name: Upload GitHub artifact (backup)
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-dist-${{ github.sha }}
+          name: frontend-build-${{ github.sha }}
           path: |
-            frontend/frontend-dist.zip
+            frontend/frontend-build.zip
             build-meta/manifest.json
           retention-days: 14
 

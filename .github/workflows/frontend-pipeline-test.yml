@@ -131,7 +131,7 @@ jobs:
       - name: Deploy to Dev S3 bucket (sync)
         shell: bash
         run: |
-          aws s3 rm "s3://${{ vars.DEV_BUCKET }}/" --recursive
+          
           aws s3 sync build/ "s3://${{ vars.DEV_BUCKET }}/" --delete
 
       - name: Cache headers (index low-cache, assets immutable)
@@ -154,7 +154,7 @@ jobs:
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.DEV_CF_DIST_ID }}" \
-            --paths "/index.html"
+            --paths "/index.html" "/asset-manifest.json" "/static/*"
 
       - name: Output summary (URL + Version + SHA)
         shell: bash

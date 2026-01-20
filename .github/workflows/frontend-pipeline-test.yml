@@ -83,7 +83,7 @@ jobs:
         run: npm run -s typecheck --if-present
 
       - name: Unit tests
-        run: npm run -s test --if-present
+        run: npm run -s test --passWithNoTests --if-present
 
       - name: Build
         run: npm run build

@@ -76,15 +76,7 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Lint
-        run: npm run -s lint --if-present
-
-      - name: Typecheck
-        run: npm run -s typecheck --if-present
-
-      - name: Unit tests
-        run: npm run -s test --if-present -- --passWithNoTests
-
+      # We do NOT re-run lint/typecheck/tests here, PR checks are required on dev.
       - name: Build
         run: npm run build
 
@@ -109,11 +101,11 @@ jobs:
           cat ../build-meta/manifest.json
 
       - name: Package build as zip
-        working-directory: frontend
+        shell: bash
         run: |
           rm -f frontend-build.zip
           cd build
-          zip -r ../frontend-build.zip .  
+          zip -r ../frontend-build.zip .
 
       - name: Upload GitHub artifact (backup)
         uses: actions/upload-artifact@v4
@@ -133,14 +125,14 @@ jobs:
       - name: Upload build artifact to S3 artifact bucket
         shell: bash
         run: |
-          aws s3 cp frontend/frontend-dist.zip "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${GITHUB_SHA}.zip"
+          aws s3 cp frontend/frontend-build.zip "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${GITHUB_SHA}.zip"
           aws s3 cp build-meta/manifest.json "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${GITHUB_SHA}.manifest.json"
 
       - name: Deploy to Dev S3 bucket (sync)
         shell: bash
         run: |
           aws s3 rm "s3://${{ vars.DEV_BUCKET }}/" --recursive
-          aws s3 sync dist/ "s3://${{ vars.DEV_BUCKET }}/" --delete
+          aws s3 sync build/ "s3://${{ vars.DEV_BUCKET }}/" --delete
 
       - name: Cache headers (index low-cache, assets immutable)
         shell: bash
@@ -150,8 +142,8 @@ jobs:
             --cache-control "no-cache, no-store, must-revalidate" \
             --content-type "text/html"
 
-          if aws s3 ls "s3://${{ vars.DEV_BUCKET }}/assets/" >/dev/null 2>&1; then
-            aws s3 cp "s3://${{ vars.DEV_BUCKET }}/assets/" "s3://${{ vars.DEV_BUCKET }}/assets/" \
+          if aws s3 ls "s3://${{ vars.DEV_BUCKET }}/static/" >/dev/null 2>&1; then
+            aws s3 cp "s3://${{ vars.DEV_BUCKET }}/static/" "s3://${{ vars.DEV_BUCKET }}/static/" \
               --recursive \
               --metadata-directive REPLACE \
               --cache-control "public, max-age=31536000, immutable"

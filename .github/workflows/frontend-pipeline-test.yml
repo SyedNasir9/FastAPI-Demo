@@ -126,7 +126,7 @@ jobs:
         shell: bash
         run: |
           aws s3 cp frontend-build.zip "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${GITHUB_SHA}.zip"
-          aws s3 cp build-meta/manifest.json "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${GITHUB_SHA}.manifest.json"
+          aws s3 cp ../build-meta/manifest.json "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${GITHUB_SHA}.manifest.json"
 
       - name: Deploy to Dev S3 bucket (sync)
         shell: bash

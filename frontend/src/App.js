@@ -3,13 +3,9 @@ import axios from "axios";
 import "./App.css";
 import TaglineSection from "./TaglineSection";
 
-const API = process.env.REACT_APP_API_BASE_URL;
-
-async function loadProducts() {
-  if (!API) return; // production: backend disabled
-  const res = await axios.get(`${API}/products`);
-  return res.data;
-}
+const api = axios.create({
+  baseURL: "http://localhost:8000",
+});
 
 function App() {
   const [products, setProducts] = useState([]);

@@ -127,7 +127,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEV }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Upload build artifact to S3 artifact bucket

@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to create on main (e.g., v1.2.3)"
+        required: true
+        type: string
 
 concurrency:
   group: production
@@ -15,8 +21,57 @@ permissions:
   actions: read
 
 jobs:
+  create_tag:
+    name: Create tag on main (UI trigger)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # needs write access to create and push a tag
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate version format
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ inputs.version }}"
+          [[ "$V" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid tag: $V (use vX.Y.Z)"; exit 1; }
+
+      - name: Fail if tag already exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag already exists locally: $TAG"
+            exit 1
+          fi
+          git fetch --tags
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag already exists on origin: $TAG"
+            exit 1
+          fi
+
+      - name: Create and push tag (main HEAD)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "Created tag: $TAG on main HEAD"
+
   release_prod:
-    name: Production Release
+    name: Production Release (runs on tag push)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     environment: production
 
@@ -38,6 +93,8 @@ jobs:
           echo "Tag: ${TAG}"
           echo "SHA: ${SHA}"
 
+      # ---- Tag validation (choose strict or flexible) ----
+      # Set production env var PROD_TAG_POLICY=strict for "tag SHA == main HEAD"
       - name: Validate tag is main HEAD (strict)
         if: vars.PROD_TAG_POLICY == 'strict'
         shell: bash
@@ -109,14 +166,12 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.ref.outputs.tag }}"
 
-          # index.html must not be cached hard
           aws s3 cp "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/index.html" \
                   "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/index.html" \
             --metadata-directive REPLACE \
             --content-type "text/html" \
             --cache-control "no-cache, no-store, must-revalidate"
 
-          # CRA hashed assets can be cached forever
           if aws s3 ls "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/static/css/" >/dev/null 2>&1; then
             aws s3 cp "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/static/css/" \
                     "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/static/css/" \
@@ -160,7 +215,6 @@ jobs:
           ORIGIN_PATH=$(jq -r '.DistributionConfig.Origins.Items[0].OriginPath' cf.json)
           echo "etag=$ETAG" >> "$GITHUB_OUTPUT"
           echo "origin_path=$ORIGIN_PATH" >> "$GITHUB_OUTPUT"
-          echo "Current origin path: $ORIGIN_PATH"
 
       - name: Safe switch (update CloudFront origin path)
         shell: bash
@@ -168,8 +222,6 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.ref.outputs.tag }}"
           NEW_PATH="/releases/${TAG}"
-          echo "Switching origin path to: ${NEW_PATH}"
-
           jq ".DistributionConfig.Origins.Items[0].OriginPath = \"${NEW_PATH}\"" cf.json \
             | jq '.DistributionConfig' > updated-config.json
 
@@ -214,7 +266,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Smoke: ${{ vars.PROD_URL }}/index.html"
           curl -fsS "${{ vars.PROD_URL }}/index.html" >/dev/null
           echo "OK"
 

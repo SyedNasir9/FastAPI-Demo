@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: main
 
+    defaults:
+      run:
+        working-directory: frontend
+
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -65,7 +69,8 @@ jobs:
           fi
           echo "OK: releases/${TAG}/ does not exist"
 
-      - name: Download artifact from S3 (by main HEAD SHA)
+      - name: Try download artifact from S3 (by main HEAD SHA)
+        id: artifact
         shell: bash
         run: |
           set -euo pipefail
@@ -73,31 +78,92 @@ jobs:
           ZIP_KEY="s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip"
           MANIFEST_KEY="s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.manifest.json"
 
-          echo "Downloading artifact: ${ZIP_KEY}"
-          if ! aws s3 cp "${ZIP_KEY}" ./frontend-build.zip; then
-            echo "ERROR: Artifact zip not found for SHA=${SHA}"
-            echo "You must publish artifacts for main (or use a promoted SHA)."
-            exit 1
+          echo "zip_key=${ZIP_KEY}" >> "$GITHUB_OUTPUT"
+          echo "manifest_key=${MANIFEST_KEY}" >> "$GITHUB_OUTPUT"
+
+          echo "Checking artifact: ${ZIP_KEY}"
+          if aws s3 ls "${ZIP_KEY}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Artifact exists."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Artifact missing for SHA=${SHA} (will build+publish now)."
           fi
 
-          echo "Downloading manifest (optional): ${MANIFEST_KEY}"
-          aws s3 cp "${MANIFEST_KEY}" ./manifest.json || true
+          
+      - name: Setup Node (only if artifact missing)
+        if: steps.artifact.outputs.exists == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install deps (only if artifact missing)
+        if: steps.artifact.outputs.exists == 'false'
+        run: npm ci
+
+      - name: Build frontend (only if artifact missing)
+        if: steps.artifact.outputs.exists == 'false'
+        run: npm run build
+
+      - name: Package build as zip (only if artifact missing)
+        if: steps.artifact.outputs.exists == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_DIR="build"   # change to "dist" if Vite
+          test -f "${BUILD_DIR}/index.html"
+
+          rm -f frontend-build.zip
+          (cd "${BUILD_DIR}" && zip -r "../frontend-build.zip" .)
+          ls -la frontend-build.zip
+
+      - name: Create + upload manifest (only if artifact missing)
+        if: steps.artifact.outputs.exists == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version" 2>/dev/null || echo '0.0.0')"
+          SHA="${{ steps.ref.outputs.sha }}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          cat > manifest.json <<EOF
+          {
+            "env": "main",
+            "version": "${VERSION}",
+            "sha": "${SHA}",
+            "run_url": "${RUN_URL}",
+            "build_time_utc": "${TS}"
+          }
+          EOF
+
+          aws s3 cp frontend-build.zip "${{ steps.artifact.outputs.zip_key }}"
+          aws s3 cp manifest.json "${{ steps.artifact.outputs.manifest_key }}" || true
+
+      - name: Download artifact zip (guaranteed now)
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3 cp "${{ steps.artifact.outputs.zip_key }}" ./frontend-build.zip
+          aws s3 cp "${{ steps.artifact.outputs.manifest_key }}" ./manifest.json || true
 
       - name: Unzip build
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf build
-          mkdir -p build
-          unzip -q frontend-build.zip -d build
-          test -f build/index.html
+          rm -rf ../build_out
+          mkdir -p ../build_out
+          unzip -q ../frontend-build.zip -d ../build_out
+          test -f ../build_out/index.html
 
       - name: Upload to Prod S3 immutable release folder
         shell: bash
         run: |
           set -euo pipefail
           TAG="${{ steps.ref.outputs.tag }}"
-          aws s3 sync build/ "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/" --delete
+          aws s3 sync ../build_out/ "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/" --delete
 
       - name: Pre-switch smoke (HTTP fetch release path)
         shell: bash
@@ -114,9 +180,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          aws cloudfront get-distribution-config --id "${{ vars.PROD_CF_DIST_ID }}" > cf.json
-          echo "etag=$(jq -r '.ETag' cf.json)" >> "$GITHUB_OUTPUT"
-          echo "origin_path=$(jq -r '.DistributionConfig.Origins.Items[0].OriginPath' cf.json)" >> "$GITHUB_OUTPUT"
+          aws cloudfront get-distribution-config --id "${{ vars.PROD_CF_DIST_ID }}" > /tmp/cf.json
+          echo "etag=$(jq -r '.ETag' /tmp/cf.json)" >> "$GITHUB_OUTPUT"
+          echo "origin_path=$(jq -r '.DistributionConfig.Origins.Items[0].OriginPath' /tmp/cf.json)" >> "$GITHUB_OUTPUT"
 
       - name: Safe switch (update CloudFront origin path)
         shell: bash
@@ -126,13 +192,13 @@ jobs:
           NEW_PATH="/releases/${TAG}"
           echo "Switching origin path to: ${NEW_PATH}"
 
-          jq ".DistributionConfig.Origins.Items[0].OriginPath = \"${NEW_PATH}\"" cf.json \
-            | jq '.DistributionConfig' > updated-config.json
+          jq ".DistributionConfig.Origins.Items[0].OriginPath = \"${NEW_PATH}\"" /tmp/cf.json \
+            | jq '.DistributionConfig' > /tmp/updated-config.json
 
           aws cloudfront update-distribution \
             --id "${{ vars.PROD_CF_DIST_ID }}" \
             --if-match "${{ steps.cf.outputs.etag }}" \
-            --distribution-config file://updated-config.json
+            --distribution-config file:///tmp/updated-config.json
 
       - name: Invalidate index.html only
         shell: bash
@@ -151,7 +217,7 @@ jobs:
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          cat > active.json <<EOF
+          cat > /tmp/active.json <<EOF
           {
             "env": "production",
             "active_version": "${TAG}",
@@ -162,7 +228,7 @@ jobs:
           }
           EOF
 
-          aws s3 cp active.json "s3://${{ vars.PROD_BUCKET }}/releases/ACTIVE_VERSION.json" \
+          aws s3 cp /tmp/active.json "s3://${{ vars.PROD_BUCKET }}/releases/ACTIVE_VERSION.json" \
             --cache-control "no-cache, no-store, must-revalidate" \
             --content-type "application/json"
 
@@ -192,4 +258,5 @@ jobs:
             echo "- Old origin path: ${{ steps.cf.outputs.origin_path }}"
             echo "- New origin path: /releases/${TAG}"
             echo "- Artifact: s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip"
+            echo "- Artifact existed: ${{ steps.artifact.outputs.exists }}"
           } >> $GITHUB_STEP_SUMMARY

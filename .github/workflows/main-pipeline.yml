@@ -1,4 +1,4 @@
-name: Release Prod (manual -> deploy immutable -> safe switch)
+name: Release Prod 
 
 on:
   workflow_dispatch:
@@ -19,9 +19,9 @@ permissions:
 
 jobs:
   release_prod:
-    name: Production Release (manual)
+    name: Production Release
     runs-on: ubuntu-latest
-    environment: production
+    environment: main
 
     steps:
       - name: Checkout main

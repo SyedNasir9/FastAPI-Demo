@@ -45,16 +45,6 @@ jobs:
           echo "Checking: s3://${{ vars.PROD_BUCKET }}/releases/${V}/index.html"
           aws s3 ls "s3://${{ vars.PROD_BUCKET }}/releases/${V}/index.html" >/dev/null
 
-      - name: Pre-switch smoke (HTTP fetch release path)
-        shell: bash
-        run: |
-          set -euo pipefail
-          V="${{ inputs.target_version }}"
-          URL="${{ vars.PROD_URL }}"
-          [[ "$URL" =~ ^https?:// ]] || URL="https://${URL}"
-          echo "Pre-switch smoke: ${URL}/releases/${V}/index.html"
-          curl -fsS "${URL}/releases/${V}/index.html" >/dev/null
-
       - name: Fetch CloudFront config + ETag
         id: cf
         shell: bash

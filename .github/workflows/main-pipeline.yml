@@ -1,4 +1,4 @@
-name: Release Prod 
+name: Release Prod
 
 on:
   workflow_dispatch:
@@ -59,16 +59,29 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ steps.ref.outputs.tag }}"
-          aws s3 ls "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/" >/dev/null 2>&1 && \
-            { echo "Release already exists: ${TAG}"; exit 1; } || true
+          if aws s3 ls "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/" >/dev/null 2>&1; then
+            echo "Release already exists: s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/"
+            exit 1
+          fi
+          echo "OK: releases/${TAG}/ does not exist"
 
       - name: Download artifact from S3 (by main HEAD SHA)
         shell: bash
         run: |
           set -euo pipefail
           SHA="${{ steps.ref.outputs.sha }}"
-          aws s3 cp "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip" ./frontend-build.zip
-          aws s3 cp "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.manifest.json" ./manifest.json || true
+          ZIP_KEY="s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip"
+          MANIFEST_KEY="s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.manifest.json"
+
+          echo "Downloading artifact: ${ZIP_KEY}"
+          if ! aws s3 cp "${ZIP_KEY}" ./frontend-build.zip; then
+            echo "ERROR: Artifact zip not found for SHA=${SHA}"
+            echo "You must publish artifacts for main (or use a promoted SHA)."
+            exit 1
+          fi
+
+          echo "Downloading manifest (optional): ${MANIFEST_KEY}"
+          aws s3 cp "${MANIFEST_KEY}" ./manifest.json || true
 
       - name: Unzip build
         shell: bash
@@ -91,7 +104,10 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ steps.ref.outputs.tag }}"
-          curl -fsS "${{ vars.PROD_URL }}/releases/${TAG}/index.html" >/dev/null
+          URL="${{ vars.PROD_URL }}"
+          [[ "$URL" =~ ^https?:// ]] || URL="https://${URL}"
+          echo "Pre-switch smoke: ${URL}/releases/${TAG}/index.html"
+          curl -fsS "${URL}/releases/${TAG}/index.html" >/dev/null
 
       - name: Fetch CloudFront config + ETag
         id: cf
@@ -108,6 +124,7 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.ref.outputs.tag }}"
           NEW_PATH="/releases/${TAG}"
+          echo "Switching origin path to: ${NEW_PATH}"
 
           jq ".DistributionConfig.Origins.Items[0].OriginPath = \"${NEW_PATH}\"" cf.json \
             | jq '.DistributionConfig' > updated-config.json
@@ -153,18 +170,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS "${{ vars.PROD_URL }}/index.html" >/dev/null
+          URL="${{ vars.PROD_URL }}"
+          [[ "$URL" =~ ^https?:// ]] || URL="https://${URL}"
+          echo "Post-deploy smoke: ${URL}/index.html"
+          curl -fsS "${URL}/index.html" >/dev/null
 
       - name: Output summary
         shell: bash
         run: |
+          set -euo pipefail
           TAG="${{ steps.ref.outputs.tag }}"
           SHA="${{ steps.ref.outputs.sha }}"
+          URL="${{ vars.PROD_URL }}"
+          [[ "$URL" =~ ^https?:// ]] || URL="https://${URL}"
+
           {
             echo "### Production Release Summary"
             echo "- Version: ${TAG}"
             echo "- SHA: ${SHA}"
-            echo "- URL: ${{ vars.PROD_URL }}"
+            echo "- URL: ${URL}"
             echo "- Old origin path: ${{ steps.cf.outputs.origin_path }}"
             echo "- New origin path: /releases/${TAG}"
+            echo "- Artifact: s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip"
           } >> $GITHUB_STEP_SUMMARY

@@ -90,7 +90,7 @@ jobs:
             echo "Artifact missing for SHA=${SHA} (will build+publish now)."
           fi
 
-          
+
       - name: Setup Node (only if artifact missing)
         if: steps.artifact.outputs.exists == 'false'
         uses: actions/setup-node@v4
@@ -152,11 +152,14 @@ jobs:
       - name: Unzip build
         shell: bash
         run: |
-          set -euo pipefail
-          rm -rf ../build_out
-          mkdir -p ../build_out
-          unzip -q ../frontend-build.zip -d ../build_out
-          test -f ../build_out/index.html
+            set -euo pipefail
+            rm -rf ../build_out
+            mkdir -p ../build_out
+            ls -la .
+            test -f ./frontend-build.zip
+            unzip -q ./frontend-build.zip -d ../build_out
+            test -f ../build_out/index.html
+
 
       - name: Upload to Prod S3 immutable release folder
         shell: bash

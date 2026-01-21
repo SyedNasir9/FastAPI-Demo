@@ -6,11 +6,7 @@ on:
     paths:
       - "frontend/**"
       - ".github/workflows/**"
-  push:
-    branches: [staging]
-    paths:
-      - "frontend/**"
-      - ".github/workflows/**"
+    types: [opened, synchronize, reopened, closed]
 
 concurrency:
   group: deploy-staging
@@ -24,7 +20,7 @@ permissions:
 jobs:
   ci_pr:
     name: CI (PR -> staging)
-    if: github.event_name == 'pull_request'
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -53,8 +49,8 @@ jobs:
         run: npm run -s test --if-present -- --passWithNoTests
 
   deploy_staging:
-    name: Deploy Staging (push to staging -> use S3 artifact)
-    if: github.event_name == 'push'
+    name: Deploy Staging (on PR merge -> use artifact from PR head SHA)
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -64,11 +60,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN_STAGING }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Download artifact from S3 (by commit SHA)
+      - name: Download artifact from S3 (by PR head SHA)
         shell: bash
         run: |
           set -euo pipefail
-          SHA="${GITHUB_SHA}"
+          SHA="${{ github.event.pull_request.head.sha }}"
+          echo "Using PR head SHA: ${SHA}"
           echo "Downloading: s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip"
           aws s3 cp "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip" ./frontend-build.zip
 
@@ -95,13 +92,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # HTML must be HTML, and should not be cached aggressively
           aws s3 cp "s3://${{ vars.STAGING_BUCKET }}/index.html" "s3://${{ vars.STAGING_BUCKET }}/index.html" \
             --metadata-directive REPLACE \
             --content-type "text/html" \
             --cache-control "no-cache, no-store, must-revalidate"
 
-          # asset-manifest.json should be JSON and also not cached aggressively
           if aws s3 ls "s3://${{ vars.STAGING_BUCKET }}/asset-manifest.json" >/dev/null 2>&1; then
             aws s3 cp "s3://${{ vars.STAGING_BUCKET }}/asset-manifest.json" "s3://${{ vars.STAGING_BUCKET }}/asset-manifest.json" \
               --metadata-directive REPLACE \
@@ -109,7 +104,6 @@ jobs:
               --cache-control "no-cache, no-store, must-revalidate"
           fi
 
-          # CRA hashed assets can be cached forever, but must have correct content-type
           if aws s3 ls "s3://${{ vars.STAGING_BUCKET }}/static/css/" >/dev/null 2>&1; then
             aws s3 cp "s3://${{ vars.STAGING_BUCKET }}/static/css/" "s3://${{ vars.STAGING_BUCKET }}/static/css/" \
               --recursive \
@@ -142,14 +136,16 @@ jobs:
           curl -fsS "${{ vars.STAGING_URL }}/index.html" >/dev/null
           echo "OK"
 
-      - name: Output summary (URL + SHA)
+      - name: Output summary (URL + promoted SHA)
         shell: bash
         run: |
+          SHA="${{ github.event.pull_request.head.sha }}"
           {
             echo "### Staging Deploy Summary"
             echo ""
             echo "- **URL:** ${{ vars.STAGING_URL }}"
-            echo "- **SHA:** ${GITHUB_SHA}"
-            echo "- **Artifact:** s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${GITHUB_SHA}.zip"
+            echo "- **Promoted SHA:** ${SHA}"
+            echo "- **Artifact:** s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip"
+            echo "- **PR:** #${{ github.event.pull_request.number }}"
             echo "- **Run:** ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> $GITHUB_STEP_SUMMARY

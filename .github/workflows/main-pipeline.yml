@@ -242,7 +242,7 @@ jobs:
           URL="${{ vars.PROD_URL }}"
           [[ "$URL" =~ ^https?:// ]] || URL="https://${URL}"
           echo "Post-deploy smoke: ${URL}/index.html"
-          curl -fsS "${URL}/index.html" >/dev/null
+          curl -fsS -A "Mozilla/5.0" "${{ vars.PROD_URL }}/" >/dev/null
 
       - name: Output summary
         shell: bash

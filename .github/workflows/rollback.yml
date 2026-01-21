@@ -52,7 +52,9 @@ jobs:
           set -euo pipefail
           aws cloudfront get-distribution-config --id "${{ vars.PROD_CF_DIST_ID }}" > /tmp/cf.json
           echo "etag=$(jq -r '.ETag' /tmp/cf.json)" >> "$GITHUB_OUTPUT"
-          echo "origin_path=$(jq -r '.DistributionConfig.Origins.Items[0].OriginPath' /tmp/cf.json)" >> "$GITHUB_OUTPUT"
+          TARGET_ID="$(jq -r '.DistributionConfig.DefaultCacheBehavior.TargetOriginId' /tmp/cf.json)"
+          echo "origin_path=$(jq -r --arg tid "$TARGET_ID" '.DistributionConfig.Origins.Items[] | select(.Id==$tid) | .OriginPath' /tmp/cf.json)" >> "$GITHUB_OUTPUT"
+
 
       - name: Safe switch (update CloudFront origin path)
         shell: bash
@@ -62,21 +64,33 @@ jobs:
           NEW_PATH="/releases/${V}"
           echo "Switching origin path to: ${NEW_PATH}"
 
-          jq ".DistributionConfig.Origins.Items[0].OriginPath = \"${NEW_PATH}\"" /tmp/cf.json \
-            | jq '.DistributionConfig' > /tmp/updated-config.json
+          TARGET_ID="$(jq -r '.DistributionConfig.DefaultCacheBehavior.TargetOriginId' /tmp/cf.json)"
+          echo "TargetOriginId: ${TARGET_ID}"
+
+          jq --arg tid "$TARGET_ID" --arg np "$NEW_PATH" '
+           .DistributionConfig.Origins.Items |=
+             (map(if .Id == $tid then .OriginPath = $np else . end))
+          | .DistributionConfig
+          ' /tmp/cf.json > /tmp/updated-config.json
 
           aws cloudfront update-distribution \
-            --id "${{ vars.PROD_CF_DIST_ID }}" \
-            --if-match "${{ steps.cf.outputs.etag }}" \
-            --distribution-config file:///tmp/updated-config.json
-
-      - name: Invalidate index.html only
+           --id "${{ vars.PROD_CF_DIST_ID }}" \
+           --if-match "${{ steps.cf.outputs.etag }}" \
+           --distribution-config file:///tmp/updated-config.json
+           
+      - name: Wait for CloudFront deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudfront wait distribution-deployed --id "${{ vars.PROD_CF_DIST_ID }}"
+          
+      - name: Invalidate
         shell: bash
         run: |
           set -euo pipefail
           aws cloudfront create-invalidation \
             --distribution-id "${{ vars.PROD_CF_DIST_ID }}" \
-            --paths "/index.html"
+            --paths "/*"
 
       - name: Update ACTIVE_VERSION.json
         shell: bash
@@ -108,7 +122,7 @@ jobs:
           URL="${{ vars.PROD_URL }}"
           [[ "$URL" =~ ^https?:// ]] || URL="https://${URL}"
           echo "Post-rollback smoke: ${URL}/index.html"
-          curl -fsS "${URL}/index.html" >/dev/null
+          curl -fsS -A "Mozilla/5.0" "${URL}/index.html" >/dev/null
           echo "OK"
 
       - name: Output summary

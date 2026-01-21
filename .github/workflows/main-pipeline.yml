@@ -168,16 +168,6 @@ jobs:
           TAG="${{ steps.ref.outputs.tag }}"
           aws s3 sync ../build_out/ "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/" --delete
 
-      - name: Pre-switch smoke (HTTP fetch release path)
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.ref.outputs.tag }}"
-          URL="${{ vars.PROD_URL }}"
-          [[ "$URL" =~ ^https?:// ]] || URL="https://${URL}"
-          echo "Pre-switch smoke: ${URL}/releases/${TAG}/index.html"
-          curl -fsS "${URL}/releases/${TAG}/index.html" >/dev/null
-
       - name: Fetch CloudFront config + ETag
         id: cf
         shell: bash

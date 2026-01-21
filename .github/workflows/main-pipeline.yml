@@ -1,0 +1,236 @@
+name: Release Prod (tag -> deploy immutable -> safe switch)
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+jobs:
+  release_prod:
+    name: Production Release
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout (full history for validation)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag + tag SHA
+        id: ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          SHA="$(git rev-list -n 1 "${TAG}")"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG}"
+          echo "SHA: ${SHA}"
+
+      - name: Validate tag is main HEAD (strict)
+        if: vars.PROD_TAG_POLICY == 'strict'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          MAIN_HEAD="$(git rev-parse origin/main)"
+          TAG_SHA="${{ steps.ref.outputs.sha }}"
+          echo "main HEAD: ${MAIN_HEAD}"
+          echo "tag SHA : ${TAG_SHA}"
+          test "${TAG_SHA}" = "${MAIN_HEAD}"
+
+      - name: Validate tag commit is contained in main (flexible)
+        if: vars.PROD_TAG_POLICY != 'strict'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=200
+          TAG_SHA="${{ steps.ref.outputs.sha }}"
+          git branch -r --contains "${TAG_SHA}" | grep -q "origin/main"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Immutability check (fail if release already exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ref.outputs.tag }}"
+          if aws s3 ls "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/" >/dev/null 2>&1; then
+            echo "Release already exists: s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/"
+            exit 1
+          fi
+          echo "OK: releases/${TAG}/ does not exist"
+
+      - name: Download artifact from S3 (by tag SHA)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="${{ steps.ref.outputs.sha }}"
+          echo "Downloading: s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip"
+          aws s3 cp "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip" ./frontend-build.zip
+
+          echo "Downloading manifest (optional): s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.manifest.json"
+          aws s3 cp "s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.manifest.json" ./manifest.json || true
+
+      - name: Unzip build
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build
+          mkdir -p build
+          unzip -q frontend-build.zip -d build
+          test -f build/index.html
+
+      - name: Upload to Prod S3 immutable release folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ref.outputs.tag }}"
+          aws s3 sync build/ "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/" --delete
+
+      - name: Fix content-types + cache headers in release folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ref.outputs.tag }}"
+
+          # index.html must not be cached hard
+          aws s3 cp "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/index.html" \
+                  "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/index.html" \
+            --metadata-directive REPLACE \
+            --content-type "text/html" \
+            --cache-control "no-cache, no-store, must-revalidate"
+
+          # CRA hashed assets can be cached forever
+          if aws s3 ls "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/static/css/" >/dev/null 2>&1; then
+            aws s3 cp "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/static/css/" \
+                    "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/static/css/" \
+              --recursive \
+              --metadata-directive REPLACE \
+              --content-type "text/css" \
+              --cache-control "public, max-age=31536000, immutable"
+          fi
+
+          if aws s3 ls "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/static/js/" >/dev/null 2>&1; then
+            aws s3 cp "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/static/js/" \
+                    "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/static/js/" \
+              --recursive \
+              --metadata-directive REPLACE \
+              --content-type "application/javascript" \
+              --cache-control "public, max-age=31536000, immutable"
+          fi
+
+      - name: Pre-switch validation (S3 exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ref.outputs.tag }}"
+          aws s3 ls "s3://${{ vars.PROD_BUCKET }}/releases/${TAG}/index.html" >/dev/null
+
+      - name: Pre-switch smoke (HTTP fetch release path)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ref.outputs.tag }}"
+          echo "Smoke: ${{ vars.PROD_URL }}/releases/${TAG}/index.html"
+          curl -fsS "${{ vars.PROD_URL }}/releases/${TAG}/index.html" >/dev/null
+
+      - name: Fetch CloudFront config + ETag
+        id: cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudfront get-distribution-config --id "${{ vars.PROD_CF_DIST_ID }}" > cf.json
+          ETAG=$(jq -r '.ETag' cf.json)
+          ORIGIN_PATH=$(jq -r '.DistributionConfig.Origins.Items[0].OriginPath' cf.json)
+          echo "etag=$ETAG" >> "$GITHUB_OUTPUT"
+          echo "origin_path=$ORIGIN_PATH" >> "$GITHUB_OUTPUT"
+          echo "Current origin path: $ORIGIN_PATH"
+
+      - name: Safe switch (update CloudFront origin path)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ref.outputs.tag }}"
+          NEW_PATH="/releases/${TAG}"
+          echo "Switching origin path to: ${NEW_PATH}"
+
+          jq ".DistributionConfig.Origins.Items[0].OriginPath = \"${NEW_PATH}\"" cf.json \
+            | jq '.DistributionConfig' > updated-config.json
+
+          aws cloudfront update-distribution \
+            --id "${{ vars.PROD_CF_DIST_ID }}" \
+            --if-match "${{ steps.cf.outputs.etag }}" \
+            --distribution-config file://updated-config.json
+
+      - name: Invalidate index.html only
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ vars.PROD_CF_DIST_ID }}" \
+            --paths "/index.html"
+
+      - name: Update ACTIVE_VERSION.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ref.outputs.tag }}"
+          SHA="${{ steps.ref.outputs.sha }}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          cat > active.json <<EOF
+          {
+            "env": "production",
+            "active_version": "${TAG}",
+            "sha": "${SHA}",
+            "deployed_at_utc": "${TS}",
+            "deployed_by": "${GITHUB_ACTOR}",
+            "workflow_run_url": "${RUN_URL}"
+          }
+          EOF
+
+          aws s3 cp active.json "s3://${{ vars.PROD_BUCKET }}/releases/ACTIVE_VERSION.json" \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --content-type "application/json"
+
+      - name: Post-deploy smoke (HTTP/app)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Smoke: ${{ vars.PROD_URL }}/index.html"
+          curl -fsS "${{ vars.PROD_URL }}/index.html" >/dev/null
+          echo "OK"
+
+      - name: Output summary
+        shell: bash
+        run: |
+          TAG="${{ steps.ref.outputs.tag }}"
+          SHA="${{ steps.ref.outputs.sha }}"
+          {
+            echo "### Production Release Summary"
+            echo ""
+            echo "- **URL:** ${{ vars.PROD_URL }}"
+            echo "- **Version:** ${TAG}"
+            echo "- **SHA:** ${SHA}"
+            echo "- **Old origin path:** ${{ steps.cf.outputs.origin_path }}"
+            echo "- **New origin path:** /releases/${TAG}"
+            echo "- **Artifact:** s3://${{ vars.ARTIFACT_BUCKET }}/frontend/${SHA}.zip"
+            echo "- **Run:** ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> $GITHUB_STEP_SUMMARY

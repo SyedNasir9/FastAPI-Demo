@@ -27,14 +27,9 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install semantic-release and plugins
+      - name: Install dependencies
         working-directory: frontend
-        run: |
-          npm install semantic-release \
-            @semantic-release/commit-analyzer \
-            @semantic-release/release-notes-generator \
-            @semantic-release/changelog \
-            @semantic-release/github
+        run: npm ci
 
       - name: Run semantic-release
         working-directory: frontend

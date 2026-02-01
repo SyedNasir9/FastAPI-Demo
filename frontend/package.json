@@ -48,6 +48,7 @@
   },
   "proxy": "http://localhost:8000",
   "devDependencies": {
+    "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/git": "^10.0.1"
   }
 }

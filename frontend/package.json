@@ -8,6 +8,15 @@
     "react-dom": "^18.2.0",
     "react-scripts": "^5.0.1"
   },
+  "release": {
+    "branches": ["semantic-release-demo"],
+    "plugins": [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+      "@semantic-release/changelog",
+      "@semantic-release/github"
+    ]
+  },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",

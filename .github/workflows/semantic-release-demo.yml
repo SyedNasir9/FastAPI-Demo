@@ -1,0 +1,43 @@
+name: Semantic Release Demo
+
+on:
+  push:
+    branches:
+      - semantic-release-demo
+
+permissions:
+  contents: write   
+
+concurrency:
+  group: semantic-release-demo
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install semantic-release and plugins
+        working-directory: frontend
+        run: |
+          npm install semantic-release \
+            @semantic-release/commit-analyzer \
+            @semantic-release/release-notes-generator \
+            @semantic-release/changelog \
+            @semantic-release/github
+
+      - name: Run semantic-release
+        working-directory: frontend
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: npx semantic-release

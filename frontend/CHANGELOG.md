@@ -1,3 +1,15 @@
+# [3.0.0](https://github.com/SyedNasir9/FastAPI-Demo/compare/v2.1.0...v3.0.0) (2026-02-01)
+
+
+### Features
+
+* refactor auth service ([5834c7b](https://github.com/SyedNasir9/FastAPI-Demo/commit/5834c7bee5dcaa2a131cbc11333b3960c8bae19d))
+
+
+### BREAKING CHANGES
+
+* removed /v1/login endpoint
+
 # [2.1.0](https://github.com/SyedNasir9/FastAPI-Demo/compare/v2.0.1...v2.1.0) (2026-02-01)
 
 
